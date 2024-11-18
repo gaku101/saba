@@ -29,18 +29,20 @@ impl Url {
   pub fn port(&self) -> String {
     self.port.clone()
   }
+
   pub fn path(&self) -> String {
     self.path.clone()
   }
+
   pub fn searchpart(&self) -> String {
     self.searchpart.clone()
   }
 
-  fn is_http(&mut self) -> bool {
+  fn is_http(&self) -> bool {
     if self.url.contains("http://") {
       return true;
     }
-    return false;
+    false
   }
 
   fn extract_host(&self) -> String {
@@ -57,6 +59,21 @@ impl Url {
     }
   }
 
+  fn extract_path(&self) -> String {
+    let url_parts: Vec<&str> = self
+      .url
+      .trim_start_matches("http://")
+      .splitn(2, "/")
+      .collect();
+
+    if url_parts.len() < 2 {
+      return "".to_string();
+    }
+
+    let path_and_searchpart: Vec<&str> = url_parts[1].splitn(2, "?").collect();
+    path_and_searchpart[0].to_string() // (d3)
+  }
+
   fn extract_port(&self) -> String {
     let url_parts: Vec<&str> = self
       .url
@@ -71,22 +88,6 @@ impl Url {
     }
   }
 
-  fn extract_path(&self) -> String {
-    let url_parts: Vec<&str> = self
-      .url
-      .trim_start_matches("http://")
-      .splitn(2, "/")
-      .collect();
-
-    if url_parts.len() < 2 {
-      return "".to_string();
-    }
-
-    let path_and_searchpart: Vec<&str> = url_parts[1].splitn(2, "?").collect();
-
-    path_and_searchpart[0].to_string()
-  }
-
   fn extract_searchpart(&self) -> String {
     let url_parts: Vec<&str> = self
       .url
@@ -99,7 +100,6 @@ impl Url {
     }
 
     let path_and_searchpart: Vec<&str> = url_parts[1].splitn(2, "?").collect();
-
     if path_and_searchpart.len() < 2 {
       "".to_string()
     } else {
@@ -139,7 +139,7 @@ mod tests {
   }
 
   #[test]
-  fn test_url_port() {
+  fn test_url_host_port() {
     let url = "http://example.com:8888".to_string();
     let expected = Ok(Url {
       url: url.clone(),
@@ -148,8 +148,7 @@ mod tests {
       path: "".to_string(),
       searchpart: "".to_string(),
     });
-
-    assert_eq!(expected, Url::new(url).parse())
+    assert_eq!(expected, Url::new(url).parse());
   }
 
   #[test]

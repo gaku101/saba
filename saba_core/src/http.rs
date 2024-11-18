@@ -1,7 +1,20 @@
+use crate::alloc::string::ToString;
 use crate::error::Error;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
+
+#[derive(Debug, Clone)]
+pub struct Header {
+  name: String,
+  value: String,
+}
+
+impl Header {
+  pub fn new(name: String, value: String) -> Self {
+    Self { name, value }
+  }
+}
 
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
@@ -14,7 +27,7 @@ pub struct HttpResponse {
 
 impl HttpResponse {
   pub fn new(raw_response: String) -> Result<Self, Error> {
-    let preprocessed_response = raw_response.trim_start().replace("\n\r", "\n");
+    let preprocessed_response = raw_response.trim_start().replace("\r\n", "\n");
 
     let (status_line, remaining) = match preprocessed_response.split_once('\n') {
       Some((s, r)) => (s, r),
@@ -42,6 +55,7 @@ impl HttpResponse {
     };
 
     let statuses: Vec<&str> = status_line.split(' ').collect();
+
     Ok(Self {
       version: statuses[0].to_string(),
       status_code: statuses[1].parse().unwrap_or(404),
@@ -78,19 +92,7 @@ impl HttpResponse {
       }
     }
 
-    Err(format!("failed to find {} in headers ", name))
-  }
-}
-
-#[derive(Debug, Clone)]
-pub struct Header {
-  name: String,
-  value: String,
-}
-
-impl Header {
-  pub fn new(name: String, value: String) -> Self {
-    Self { name, value }
+    Err(format!("failed to find {} in headers", name))
   }
 }
 
@@ -108,8 +110,9 @@ mod tests {
   fn test_status_line_only() {
     let raw = "HTTP/1.1 200 OK\n\n".to_string();
     let res = HttpResponse::new(raw).expect("failed to parse http response");
+    assert_eq!(res.version(), "HTTP/1.1");
     assert_eq!(res.status_code(), 200);
-    assert_eq!(res.reason(), "OK")
+    assert_eq!(res.reason(), "OK");
   }
 
   #[test]
