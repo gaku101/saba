@@ -595,7 +595,7 @@ mod tests {
 
   #[test]
   fn test_script_tag() {
-    let html = "<script>is code;</script>".to_string();
+    let html = "<script>js code;</script>".to_string();
     let mut tokenizer = HtmlTokenizer::new(html);
     let expected = [
       HtmlToken::StartTag {
