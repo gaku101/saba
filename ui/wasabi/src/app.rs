@@ -73,6 +73,100 @@ impl WasabiUI {
         &mut self,
         handle_url: fn(String) -> Result<HttpResponse, Error>,
     ) -> Result<(), Error> {
+        loop {
+            self.handle_mouse_input(handle_url)?;
+            self.handle_key_input(handle_url)?;
+        }
+    }
+
+    fn handle_mouse_input(
+        &mut self,
+        handle_url: fn(String) -> Result<HttpResponse, Error>,
+    ) -> Result<(), Error> {
+        if let Some(MouseEvent { button, position }) = Api::get_mouse_cursor_info() {
+            self.window.flush_area(self.cursor.rect());
+            self.cursor.set_position(position.x, position.y);
+            self.window.flush_area(self.cursor.rect());
+            self.cursor.flush();
+
+            if button.l() || button.c() || button.r() {
+                // 相対位置を計算する
+                let relative_pos = (
+                    position.x - WINDOW_INIT_X_POS,
+                    position.y - WINDOW_INIT_Y_POS,
+                );
+
+                // ウィンドウの外をクリックされたときは何もしない
+                if relative_pos.0 < 0
+                    || relative_pos.0 > WINDOW_WIDTH
+                    || relative_pos.1 < 0
+                    || relative_pos.1 > WINDOW_HEIGHT
+                {
+                    println!("button clicked OUTSIDE window: {button:?} {position:?}");
+
+                    return Ok(());
+                }
+
+                // ツールバーの範囲をクリックされたとき、InputModeをEditingに変更する
+                if relative_pos.1 < TOOLBAR_HEIGHT + TITLE_BAR_HEIGHT
+                    && relative_pos.1 >= TITLE_BAR_HEIGHT
+                {
+                    self.clear_address_bar()?;
+                    self.input_url = String::new();
+                    self.input_mode = InputMode::Editing;
+                    println!("button clicked in toolbar: {button:?} {position:?}");
+                    return Ok(());
+                }
+
+                self.input_mode = InputMode::Normal;
+
+                let position_in_content_area = (
+                    relative_pos.0,
+                    relative_pos.1 - TITLE_BAR_HEIGHT - TOOLBAR_HEIGHT,
+                );
+                let page = self.browser.borrow().current_page();
+                let next_destination = page.borrow_mut().clicked(position_in_content_area);
+
+                if let Some(url) = next_destination {
+                    self.input_url = url.clone();
+                    self.update_address_bar()?;
+                    self.start_navigation(handle_url, url)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_key_input(
+        &mut self,
+        handle_url: fn(String) -> Result<HttpResponse, Error>,
+    ) -> Result<(), Error> {
+        match self.input_mode {
+            InputMode::Normal => {
+                // InputModeがNormalのとき、キー入力を無視する
+                let _ = Api::read_key();
+            }
+            InputMode::Editing => {
+                if let Some(c) = Api::read_key() {
+                    if c == 0x0A as char {
+                        // エンターキーが押されたので、ナビゲーションを開始する
+                        self.start_navigation(handle_url, self.input_url.clone())?;
+
+                        self.input_url = String::new();
+                        self.input_mode = InputMode::Normal;
+                    } else if c == 0x7F as char || c == 0x08 as char {
+                        // デリートキーまたはバックスペースキーが押されたので、最後の文字を削除する
+                        self.input_url.pop();
+                        self.update_address_bar()?;
+                    } else {
+                        self.input_url.push(c);
+                        self.update_address_bar()?;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
