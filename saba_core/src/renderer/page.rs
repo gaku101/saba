@@ -24,6 +24,7 @@ pub struct Page {
     display_items: Vec<DisplayItem>,
 }
 
+// TODO: fix warning
 impl Page {
     pub fn new() -> Self {
         Self {
