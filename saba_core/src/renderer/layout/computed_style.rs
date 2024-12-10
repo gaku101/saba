@@ -77,7 +77,7 @@ impl ComputedStyle {
     }
 
     pub fn set_background_color(&mut self, color: Color) {
-        self.background_color = Some(Color::white())
+        self.background_color = Some(color);
     }
 
     pub fn background_color(&self) -> Color {
@@ -233,6 +233,7 @@ impl Color {
     }
 }
 
+/// https://www.w3.org/TR/css-fonts-4/#absolute-size-mapping
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum FontSize {
     Medium,
