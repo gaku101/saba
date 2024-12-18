@@ -1,3 +1,6 @@
+use crate::renderer::dom::api::get_element_by_id;
+use crate::renderer::dom::node::Node as DomNode;
+use crate::renderer::dom::node::NodeKind as DomNodeKind;
 use crate::renderer::js::ast::Node;
 use crate::renderer::js::ast::Program;
 use alloc::rc::Rc;
@@ -71,16 +74,43 @@ impl Environment {
 
 #[derive(Debug, Clone)]
 pub struct JsRuntime {
+  dom_root: Rc<RefCell<DomNode>>,
   functions: Vec<Function>,
   env: Rc<RefCell<Environment>>,
 }
 
 impl JsRuntime {
-  pub fn new() -> Self {
+  pub fn new(dom_root: Rc<RefCell<DomNode>>) -> Self {
     Self {
+      dom_root,
       functions: Vec::new(),
       env: Rc::new(RefCell::new(Environment::new(None))),
     }
+  }
+
+  /// (bool, Option<RuntimeValue>) のタプルを返す
+  ///   bool: ブラウザAPIが呼ばれたかどうか。trueなら何かしらのAPIが呼ばれたことを示す
+  ///   Option<RuntimeValue>: ブラウザAPIの呼び出しによって得られた結果
+  fn call_browser_api(&mut self, func: &RuntimeValue, arguments: &[Option<Rc<Node>>], env: Rc<RefCell<Environment>>) -> (bool, Option<RuntimeValue>) {
+    if func == &RuntimeValue::StringLiteral("document.getElementById".to_string()) {
+      let arg = match self.eval(&arguments[0], env.clone()) {
+        Some(a) => a,
+        None => return (true, None),
+      };
+      let target = match get_element_by_id(Some(self.dom_root.clone()), &arg.to_string()) {
+        Some(n) => n,
+        None => return (true, None),
+      };
+      return (
+        true,
+        Some(RuntimeValue::HtmlElement {
+          object: target,
+          property: None,
+        }),
+      );
+    }
+
+    (false, None)
   }
 
   fn eval(&mut self, node: &Option<Rc<Node>>, env: Rc<RefCell<Environment>>) -> Option<RuntimeValue> {
@@ -121,9 +151,48 @@ impl JsRuntime {
             return None;
           }
         }
+
+        // もし左辺の値がDOMツリーのノードを表すHtmlElementならば、DOMツリーを更新する
+        if let Some(RuntimeValue::HtmlElement { object, property }) = self.eval(left, env.clone()) {
+          let right_value = match self.eval(right, env.clone()) {
+            Some(value) => value,
+            None => return None,
+          };
+
+          if let Some(p) = property {
+            // target.textContent = "foobar"; のようにノードのテキストを変更する
+            if p == "textContent" {
+              object.borrow_mut().set_first_child(Some(Rc::new(RefCell::new(DomNode::new(DomNodeKind::Text(right_value.to_string()))))));
+            }
+          }
+        }
         None
       }
-      Node::MemberExpression { object, property } => None,
+      Node::MemberExpression { object, property } => {
+        let object_value = match self.eval(object, env.clone()) {
+          Some(value) => value,
+          None => return None,
+        };
+        let property_value = match self.eval(property, env.clone()) {
+          Some(value) => value,
+          // プロパティが存在しないため、`object_value`をここで返す
+          None => return Some(object_value),
+        };
+
+        // もしオブジェクトがDOMノードの場合、HtmlElementの`property`を更新する
+        if let RuntimeValue::HtmlElement { object, property } = object_value {
+          assert!(property.is_none());
+          // HtmlElementの`property`に`property_value`の文字列をセットする
+          return Some(RuntimeValue::HtmlElement {
+            object,
+            property: Some(property_value.to_string()),
+          });
+        }
+
+        // document.getElementByIdは、"document.getElementById"という一つの文字列として扱う。
+        // このメソッドへの呼び出しは、"document.getElementById"という名前の関数への呼び出しになる
+        return Some(object_value + RuntimeValue::StringLiteral(".".to_string()) + property_value);
+      }
       Node::NumericLiteral(value) => Some(RuntimeValue::Number(*value)),
       Node::VariableDeclaration { declarations } => {
         for declaration in declarations {
@@ -215,7 +284,7 @@ impl JsRuntime {
     }
   }
 
-  pub fn exexute(&mut self, program: &Program) {
+  pub fn execute(&mut self, program: &Program) {
     for node in program.body() {
       self.eval(&Some(node.clone()), self.env.clone());
     }
@@ -229,6 +298,10 @@ pub enum RuntimeValue {
   Number(u64),
   /// https://262.ecma-international.org/#sec-ecmascript-language-types-string-type
   StringLiteral(String),
+  HtmlElement {
+    object: Rc<RefCell<DomNode>>,
+    property: Option<String>,
+  },
 }
 
 impl Add<RuntimeValue> for RuntimeValue {
@@ -261,6 +334,9 @@ impl Display for RuntimeValue {
     let s = match self {
       RuntimeValue::Number(value) => format!("{}", value),
       RuntimeValue::StringLiteral(value) => value.to_string(),
+      RuntimeValue::HtmlElement { object, property: _ } => {
+        format!("HtmlElement: {:#?}", object)
+      }
     };
     write!(f, "{}", s)
   }
@@ -275,11 +351,12 @@ mod tests {
 
   #[test]
   fn test_num() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "42".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [Some(RuntimeValue::Number(42))];
     let mut i = 0;
 
@@ -292,15 +369,17 @@ mod tests {
 
   #[test]
   fn test_add_nums() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "1 + 2".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [Some(RuntimeValue::Number(3))];
     let mut i = 0;
 
     for node in ast.body() {
+      let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
       let result = runtime.eval(&Some(node.clone()), runtime.env.clone());
       assert_eq!(expected[i], result);
       i += 1;
@@ -309,15 +388,17 @@ mod tests {
 
   #[test]
   fn test_sub_nums() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "2 - 1".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [Some(RuntimeValue::Number(1))];
     let mut i = 0;
 
     for node in ast.body() {
+      let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
       let result = runtime.eval(&Some(node.clone()), runtime.env.clone());
       assert_eq!(expected[i], result);
       i += 1;
@@ -326,15 +407,17 @@ mod tests {
 
   #[test]
   fn test_assign_variable() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "var foo=42;".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [None];
     let mut i = 0;
 
     for node in ast.body() {
+      let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
       let result = runtime.eval(&Some(node.clone()), runtime.env.clone());
       assert_eq!(expected[i], result);
       i += 1;
@@ -343,15 +426,17 @@ mod tests {
 
   #[test]
   fn test_add_variable_and_num() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "var foo=42; foo+1".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [None, Some(RuntimeValue::Number(43))];
     let mut i = 0;
 
     for node in ast.body() {
+      let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
       let result = runtime.eval(&Some(node.clone()), runtime.env.clone());
       assert_eq!(expected[i], result);
       i += 1;
@@ -360,15 +445,17 @@ mod tests {
 
   #[test]
   fn test_reassign_variable() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "var foo=42; foo=1; foo".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [None, None, Some(RuntimeValue::Number(1))];
     let mut i = 0;
 
     for node in ast.body() {
+      let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
       let result = runtime.eval(&Some(node.clone()), runtime.env.clone());
       assert_eq!(expected[i], result);
       i += 1;
@@ -377,11 +464,12 @@ mod tests {
 
   #[test]
   fn test_add_function_and_num() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "function foo() { return 42; } foo()+1".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [None, Some(RuntimeValue::Number(43))];
     let mut i = 0;
 
@@ -394,15 +482,17 @@ mod tests {
 
   #[test]
   fn test_define_function_with_args() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "function foo(a, b) { return a + b; } foo(1, 2) + 3;".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [None, Some(RuntimeValue::Number(6))];
     let mut i = 0;
 
     for node in ast.body() {
+      let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
       let result = runtime.eval(&Some(node.clone()), runtime.env.clone());
       assert_eq!(expected[i], result);
       i += 1;
@@ -411,11 +501,12 @@ mod tests {
 
   #[test]
   fn test_local_variable() {
+    let dom = Rc::new(RefCell::new(DomNode::new(DomNodeKind::Document)));
     let input = "var a=42; function foo() { var a=1; return a; } foo()+a".to_string();
     let lexer = JsLexer::new(input);
     let mut parser = JsParser::new(lexer);
     let ast = parser.parse_ast();
-    let mut runtime = JsRuntime::new();
+    let mut runtime = JsRuntime::new(dom);
     let expected = [None, None, Some(RuntimeValue::Number(43))];
     let mut i = 0;
 

@@ -133,15 +133,15 @@ impl Iterator for JsLexer {
 
     let token = match c {
       '+' | '-' | ';' | '=' | '(' | ')' | '{' | '}' | ',' | '.' => {
-        let t = Token::Punctuator(c);
-        self.pos += 1;
-        t
+          let t = Token::Punctuator(c);
+          self.pos += 1;
+          t
       }
       '0'..='9' => Token::Number(self.consume_number()),
       'a'..='z' | 'A'..='Z' | '_' | '$' => Token::Identifier(self.consume_identifier()),
       '"' => Token::StringLiteral(self.consume_string()),
       _ => unimplemented!("char {:?} is not supported yet", c),
-    };
+  };
     Some(token)
   }
 }
